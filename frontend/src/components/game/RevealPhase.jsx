@@ -4,7 +4,7 @@ import useGameStore from '../../store/gameStore'
 import { gameHelpers } from '../../lib/supabase'
 
 const RevealPhase = () => {
-  const { roomId, votes, participants, phaseTimer, eliminated } = useGameStore()
+  const { roomId, room, votes, participants, phaseTimer, eliminated } = useGameStore()
   const [voteResults, setVoteResults] = useState(null)
   const [loading, setLoading] = useState(true)
 
@@ -13,12 +13,22 @@ const RevealPhase = () => {
   }, [votes])
 
   const calculateResults = async () => {
+    // 🔧 FIX: Don't call hooks here - use roomId from component scope
+    if (!roomId || !room) {
+      console.warn('⚠️ Room not loaded, skipping results')
+      setVoteResults({ error: 'Room not loaded' })
+      setLoading(false)
+      return
+    }
+    
     try {
+      setLoading(true)
       const results = await gameHelpers.calculateVoteResults(roomId)
       setVoteResults(results)
       setLoading(false)
     } catch (error) {
-      console.error('Error calculating results:', error)
+      console.error('❌ Error calculating results:', error)
+      setVoteResults({ error: error.message })
       setLoading(false)
     }
   }
