@@ -9,16 +9,23 @@ const VerdictPhase = () => {
     votes, 
     submitVote, 
     phaseTimer,
-    gamePhase, // 🔧 FIX: Get gamePhase to check if we should show votes
-    getAliveParticipants 
+    gamePhase,
+    getAliveParticipants,
+    advancePhase,
+    stopPhaseTimer, // ✅ BUG FIX #6: Import stopPhaseTimer
+    room // ✅ BUG FIX #6: Import room to check game_mode
   } = useGameStore()
   
   const [selectedPlayer, setSelectedPlayer] = useState(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [hasVoted, setHasVoted] = useState(false)
+  const [isAdvancing, setIsAdvancing] = useState(false)
+  const [showAllVotedMessage, setShowAllVotedMessage] = useState(false)
+  const [countdown, setCountdown] = useState(2)
 
   const alivePlayers = getAliveParticipants().filter(p => p.user_id !== myUserId)
   const myPlayer = getAliveParticipants().find(p => p.user_id === myUserId)
+  const totalAlivePlayers = getAliveParticipants().length
 
   useEffect(() => {
     const myVote = votes.find(v => v.voter_id === myUserId)
@@ -27,6 +34,48 @@ const VerdictPhase = () => {
       setSelectedPlayer(myVote.target_id)
     }
   }, [votes, myUserId])
+
+  // ✨ NEW: Auto-advance when all votes submitted
+  useEffect(() => {
+    const allVoted = votes.length >= totalAlivePlayers
+    
+    if (allVoted && !isAdvancing && totalAlivePlayers > 0) {
+      console.log('✅ All players voted! Auto-advancing to results...')
+      setShowAllVotedMessage(true)
+      setIsAdvancing(true)
+      
+      // ✅ BUG FIX #6: Stop timer in REAL mode
+      if (room?.game_mode === 'REAL') {
+        console.log('⏸️ REAL mode: Stopping phase timer')
+        stopPhaseTimer()
+      } else {
+        console.log('⏰ SILENT mode: Timer continues (intentional)')
+      }
+      
+      // Small delay for UX (show "All votes in!" message)
+      setTimeout(() => {
+        console.log('🚀 Advancing to REVEAL phase')
+        advancePhase()
+      }, 2000)
+    }
+  }, [votes.length, totalAlivePlayers, isAdvancing, room?.game_mode, stopPhaseTimer, advancePhase])
+
+  // ✅ BUG FIX #3: Countdown timer for visual feedback during auto-advance
+  useEffect(() => {
+    if (!showAllVotedMessage) return
+    
+    const interval = setInterval(() => {
+      setCountdown(prev => {
+        if (prev <= 0) {
+          clearInterval(interval)
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+
+    return () => clearInterval(interval)
+  }, [showAllVotedMessage])
 
   const handleVote = async () => {
     if (!selectedPlayer || isSubmitting || hasVoted) return
@@ -63,7 +112,23 @@ const VerdictPhase = () => {
           <div className="text-6xl mb-4">👻</div>
           <h2 className="text-2xl font-bold text-gray-400 mb-2">You've Been Eliminated</h2>
           <p className="text-gray-500">Watch as the remaining players vote</p>
-          <div data-testid="phase-timer" className="mt-6 text-4xl font-bold text-purple-400">{phaseTimer}s</div>
+          
+          {/* ✅ BUG FIX #6: Only show timer in SILENT mode or if timer is running */}
+          {(room?.game_mode === 'SILENT' || phaseTimer > 0) && (
+            <div data-testid="phase-timer" className="mt-6 text-4xl font-bold text-purple-400">{phaseTimer}s</div>
+          )}
+          
+          {/* Show all-voted message even for eliminated players */}
+          {showAllVotedMessage && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mt-6 p-4 bg-green-500/20 border-2 border-green-500 rounded-xl"
+            >
+              <p className="text-green-400 font-bold text-lg">✅ All votes in!</p>
+              <p className="text-gray-300 text-sm mt-1">Revealing results in {countdown}s...</p>
+            </motion.div>
+          )}
         </motion.div>
       </div>
     )
@@ -76,16 +141,35 @@ const VerdictPhase = () => {
         <h2 className="text-3xl font-bold text-white mb-2">⚖️ Cast Your Vote</h2>
         <p className="text-gray-400">Who do you think is the traitor?</p>
         <div className="mt-4 flex items-center justify-center gap-2">
-          <div data-testid="phase-timer" className="text-2xl font-bold text-red-400">{phaseTimer}s</div>
-          <div className="text-gray-400">|</div>
+          {/* ✅ BUG FIX #6: Only show timer in SILENT mode or if timer is running */}
+          {(room?.game_mode === 'SILENT' || phaseTimer > 0) && (
+            <>
+              <div data-testid="phase-timer" className="text-2xl font-bold text-red-400">{phaseTimer}s</div>
+              <div className="text-gray-400">|</div>
+            </>
+          )}
           <div data-testid="vote-progress" className="text-sm text-gray-400">
             {voteCount}/{totalVoters} votes cast
           </div>
         </div>
       </div>
 
+      {/* ✨ NEW: All Votes In Message with Countdown */}
+      {showAllVotedMessage && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="mb-8 bg-green-500/20 border-2 border-green-500 rounded-xl p-6 text-center"
+        >
+          <div className="text-4xl mb-2">✅</div>
+          <p className="text-green-400 font-bold text-xl">All votes in!</p>
+          {/* ✅ BUG FIX #3: Show countdown so users know it's intentional delay */}
+          <p className="text-gray-300 mt-2">Revealing results in {countdown}s...</p>
+        </motion.div>
+      )}
+
       {/* Voted Confirmation */}
-      {hasVoted && (
+      {hasVoted && !showAllVotedMessage && (
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -159,7 +243,7 @@ const VerdictPhase = () => {
         </motion.div>
       )}
 
-      {/* 🔧 FIX: Vote Tally - ONLY SHOW IN REVEAL PHASE */}
+      {/* Vote Tally - ONLY SHOW IN REVEAL PHASE */}
       {gamePhase === 'REVEAL' && votes.length > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
