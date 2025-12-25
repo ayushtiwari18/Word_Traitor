@@ -6,6 +6,10 @@ import Lobby from './pages/Lobby'
 import Game from './pages/Game'
 import Results from './pages/Results'
 import Settings from './pages/Settings'
+import Developers from './pages/Developers'
+import About from './pages/About'
+import Privacy from './pages/Privacy'
+import FeedbackButton from '../components/FeedbackButton'
 import useGameStore from '../store/gameStore'
 
 function App() {
@@ -33,7 +37,13 @@ function App() {
             <Route path="/game/:roomId" element={<Game />} />
             <Route path="/results/:roomId" element={<Results />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/developers" element={<Developers />} />
+            <Route path="/about" element={<About />} />
+            <Route path="/privacy" element={<Privacy />} />
           </Routes>
+          
+          {/* Floating Feedback Button - Available on all pages */}
+          <FeedbackButton />
         </Router>
       </div>
     </ErrorBoundary>

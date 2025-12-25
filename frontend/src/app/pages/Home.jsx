@@ -199,7 +199,7 @@ const Home = () => {
               onError={() => setLogoError(true)}
             />
           ) : (
-            <div className="text-5xl"></div>
+            <div className="text-5xl">🎭</div>
           )}
           <div>
             <h1 className="text-2xl font-bold text-white">WordTraitor</h1>
@@ -237,7 +237,7 @@ const Home = () => {
               }}
               className="text-8xl mb-6"
             >
-               <img src="/Header.png" alt="Word Traitor Logo" className="inline-block w-32 h-32 mr-2" /> 
+              🎭 <img src="/Header.png" alt="Word Traitor Logo" className="inline-block w-32 h-32 mr-2" /> 
             </motion.div>
             <h1 className="text-6xl font-bold text-white mb-4">
               Word<span className="text-red-500 text-glow-purple">Traitor</span>
@@ -360,10 +360,39 @@ const Home = () => {
         </div>
       </div>
 
-      {/* Footer */}
-      <footer className="relative z-10 p-6 text-center text-gray-500 text-sm border-t border-gray-800">
-        <p>🎮 Built with deception in mind | © 2024 WordTraitor</p>
-        <p className="mt-1 text-xs">A social deduction game for 4-12 players</p>
+      {/* Footer - ENHANCED with working navigation links */}
+      <footer className="relative z-10 p-6 border-t border-gray-800">
+        <div className="max-w-4xl mx-auto">
+          {/* Links */}
+          <div className="flex flex-wrap justify-center gap-4 md:gap-6 mb-4">
+            <button
+              onClick={() => navigate('/about')}
+              className="text-gray-400 hover:text-cyan-400 transition-colors text-sm font-medium flex items-center gap-1"
+            >
+              📖 About
+            </button>
+            <span className="text-gray-700">|</span>
+            <button
+              onClick={() => navigate('/privacy')}
+              className="text-gray-400 hover:text-cyan-400 transition-colors text-sm font-medium flex items-center gap-1"
+            >
+              🔒 Privacy & Terms
+            </button>
+            <span className="text-gray-700">|</span>
+            <button
+              onClick={() => navigate('/developers')}
+              className="text-gray-400 hover:text-purple-400 transition-colors text-sm font-medium flex items-center gap-1"
+            >
+              👥 Developers
+            </button>
+          </div>
+          
+          {/* Copyright */}
+          <div className="text-center">
+            <p className="text-gray-500 text-sm">🎮 Built with deception in mind | © 2025 WordTraitor</p>
+            <p className="mt-1 text-xs text-gray-600">A social deduction game for 4-12 players</p>
+          </div>
+        </div>
       </footer>
 
       {/* Join Room Modal - Same as before */}
