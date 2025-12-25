@@ -1,280 +1,407 @@
 import React, { useEffect, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useNavigate, useParams } from 'react-router-dom'
+import { motion } from 'framer-motion'
 import useGameStore from '../../store/gameStore'
-import { gameHelpers } from '../../lib/supabase'
+import { useGameMusic } from '../../hooks/useGameMusic'
+import { supabase } from '../../lib/supabase'
+import confetti from 'canvas-confetti'
 
-const RevealPhase = () => {
-  const { roomId, room, votes, participants, phaseTimer, eliminated } = useGameStore()
-  const [voteResults, setVoteResults] = useState(null)
-  const [loading, setLoading] = useState(true)
+const Results = () => {
+  const { roomId } = useParams()
+  const navigate = useNavigate()
   
-  // Reveal sequence state (0-4)
-  const [revealStep, setRevealStep] = useState(0)
+  const { gameResults: storeResults, participants: storeParticipants, myUserId, mySecret, leaveRoom } = useGameStore()
+  const [gameResults, setGameResults] = useState(storeResults)
+  const [participants, setParticipants] = useState(storeParticipants)
+  const [traitorDetails, setTraitorDetails] = useState(null)
+  const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    calculateResults()
-  }, [votes])
+  // 🎵 Play victory/defeat music
+  useGameMusic('FINISHED', true)
 
-  // Timed reveal sequence
+  // ✅ Load results from database if not in store
   useEffect(() => {
-    if (!voteResults || loading) return
-    
-    const timer1 = setTimeout(() => setRevealStep(1), 1000) // "Counting votes..." -> "The accused is..."
-    const timer2 = setTimeout(() => setRevealStep(2), 2500) // Show name
-    const timer3 = setTimeout(() => setRevealStep(3), 4000) // Show role/word
-    const timer4 = setTimeout(() => setRevealStep(4), 5500) // Show all votes
-    
-    return () => {
-      clearTimeout(timer1)
-      clearTimeout(timer2)
-      clearTimeout(timer3)
-      clearTimeout(timer4)
+    const loadResults = async () => {
+      console.log('🔍 Results page mounted')
+      console.log('🎮 Game Results from store:', storeResults)
+      console.log('👥 Participants from store:', storeParticipants)
+      
+      try {
+        // ✅ If gameResults not in store, fetch from database
+        if (!storeResults || !storeResults.winner) {
+          console.log('⚠️ gameResults not in store, fetching from database...')
+          
+          // Fetch room to get winner and traitor info
+          const { data: room, error: roomError } = await supabase
+            .from('rooms')
+            .select('*')
+            .eq('id', roomId)
+            .single()
+          
+          if (roomError) {
+            console.error('❌ Error fetching room:', roomError)
+            setLoading(false)
+            return
+          }
+          
+          console.log('✅ Room fetched:', room)
+          
+          if (room.status !== 'FINISHED') {
+            console.error('❌ Room status is not FINISHED:', room.status)
+            setLoading(false)
+            return
+          }
+          
+          // Fetch participants
+          const { data: participantsData, error: participantsError } = await supabase
+            .from('room_participants')
+            .select('*')
+            .eq('room_id', roomId)
+          
+          if (participantsError) {
+            console.error('❌ Error fetching participants:', participantsError)
+          } else {
+            console.log('✅ Participants fetched:', participantsData)
+            setParticipants(participantsData)
+          }
+          
+          // Get traitor IDs (from traitor_ids JSON or fetch from participants)
+          let traitorIds = []
+          if (room.traitor_ids && Array.isArray(room.traitor_ids)) {
+            traitorIds = room.traitor_ids
+          } else {
+            // Fallback: find traitors from participants
+            const traitors = participantsData?.filter(p => p.role === 'TRAITOR') || []
+            traitorIds = traitors.map(t => t.user_id)
+          }
+          
+          console.log('✅ Traitor IDs:', traitorIds)
+          
+          const results = {
+            ended: true,
+            winner: room.winner,
+            traitorIds: traitorIds,
+            traitorId: traitorIds[0],  // For backwards compatibility
+            voteCounts: {}  // We don't have vote counts here, but not critical
+          }
+          
+          setGameResults(results)
+          console.log('✅ Game results constructed from database:', results)
+        } else {
+          setGameResults(storeResults)
+          setParticipants(storeParticipants)
+        }
+        
+        // Fire confetti
+        setTimeout(() => {
+          confetti({
+            particleCount: 150,
+            spread: 90,
+            origin: { y: 0.6 },
+            colors: ['#9333ea', '#ec4899', '#3b82f6', '#10b981']
+          })
+        }, 500)
+        
+      } catch (error) {
+        console.error('❌ Error loading results:', error)
+      }
     }
-  }, [voteResults, loading])
+    
+    loadResults()
+  }, [roomId, storeResults, storeParticipants])
 
-  const calculateResults = async () => {
-    if (!roomId || !room) {
-      console.warn('⚠️ Room not loaded, skipping results')
-      setVoteResults({ error: 'Room not loaded' })
-      setLoading(false)
+  // Load traitor details
+  useEffect(() => {
+    if (!gameResults || !gameResults.traitorIds || participants.length === 0) {
       return
     }
     
-    try {
-      setLoading(true)
-      const results = await gameHelpers.calculateVoteResults(roomId)
-      setVoteResults(results)
-      setLoading(false)
-    } catch (error) {
-      console.error('❌ Error calculating results:', error)
-      setVoteResults({ error: error.message })
-      setLoading(false)
+    const loadTraitorDetails = async () => {
+      try {
+        const traitorIds = gameResults.traitorIds || []
+        const traitorId = traitorIds[0] || gameResults.traitorId
+        
+        if (!traitorId) {
+          console.error('❌ No traitor ID in game results')
+          setLoading(false)
+          return
+        }
+
+        console.log('🔍 Looking for traitor:', traitorId)
+        
+        // First try participants array
+        let traitor = participants.find(p => p.user_id === traitorId)
+        
+        // If not found, fetch from database
+        if (!traitor) {
+          console.log('⚠️ Traitor not in participants array, fetching from database...')
+          
+          const { data, error } = await supabase
+            .from('room_participants')
+            .select('user_id, username, is_alive, role')
+            .eq('user_id', traitorId)
+            .eq('room_id', roomId)
+            .single()
+          
+          if (error) {
+            console.error('❌ Error fetching traitor from DB:', error)
+          } else if (data) {
+            traitor = data
+            console.log('✅ Fetched traitor from database:', traitor)
+          }
+        } else {
+          console.log('✅ Found traitor in participants:', traitor)
+        }
+        
+        setTraitorDetails(traitor)
+        setLoading(false)
+      } catch (error) {
+        console.error('❌ Error loading traitor details:', error)
+        setLoading(false)
+      }
     }
+    
+    loadTraitorDetails()
+  }, [gameResults, participants, roomId])
+
+  const handleNewGame = async () => {
+    await leaveRoom()
+    navigate('/')
   }
 
-  if (loading) {
+  const handleGoHome = async () => {
+    await leaveRoom()
+    navigate('/')
+  }
+
+  // Show loading if gameResults is not ready
+  if (loading || !gameResults || !gameResults.winner) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="text-2xl text-purple-400 animate-pulse">Calculating results...</div>
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900">
+        <div className="text-center">
+          <div className="text-2xl text-purple-400 animate-pulse mb-4">Loading results...</div>
+          {!gameResults && (
+            <p className="text-gray-500 text-sm">Fetching game data from server...</p>
+          )}
+        </div>
       </div>
     )
   }
 
-  const eliminatedPlayer = participants.find(p => p.user_id === voteResults?.eliminatedId)
-  const voteCounts = voteResults?.voteCounts || {}
-  const sortedVotes = Object.entries(voteCounts).sort((a, b) => b[1] - a[1])
+  const winner = gameResults.winner
+  const traitorIds = gameResults.traitorIds || []
+  const traitorId = traitorIds[0] || gameResults.traitorId
+  const wasITraitor = myUserId === traitorId
+  const didIWin = (winner === 'TRAITOR' && wasITraitor) || (winner === 'CITIZENS' && !wasITraitor)
 
   return (
-    <div className="max-w-4xl mx-auto p-6">
-      {/* Header */}
-      <div className="text-center mb-8">
-        <h2 className="text-3xl font-bold text-white mb-2">🎭 The Verdict</h2>
-        <AnimatePresence mode="wait">
-          {revealStep === 0 && (
-            <motion.p
-              key="counting"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="text-gray-400 animate-pulse"
-            >
-              📊 Counting votes...
-            </motion.p>
-          )}
-          {revealStep === 1 && (
-            <motion.p
-              key="accused"
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0 }}
-              className="text-xl text-purple-400 font-bold"
-            >
-              The accused is...
-            </motion.p>
-          )}
-          {revealStep >= 2 && (
-            <motion.p
-              key="truth"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-gray-400"
-            >
-              The truth is revealed...
-            </motion.p>
-          )}
-        </AnimatePresence>
-        <div className="mt-4 text-2xl font-bold text-purple-400">{phaseTimer}s</div>
-      </div>
-
-      {/* STEP 2: Show eliminated player name */}
-      {revealStep >= 2 && eliminatedPlayer && (
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 py-12 px-4">
+      <div className="max-w-4xl mx-auto">
+        {/* Winner Announcement */}
         <motion.div
           initial={{ opacity: 0, scale: 0.5 }}
-          animate={{ 
-            opacity: 1, 
-            scale: 1,
-            rotate: revealStep === 2 ? [0, -5, 5, -5, 5, 0] : 0
-          }}
-          transition={{ type: 'spring', stiffness: 200, damping: 15 }}
-          className="mb-8 bg-gradient-to-r from-red-900/50 to-purple-900/50 border-2 border-red-500 rounded-2xl p-8 text-center"
-        >
-          <div className="text-6xl mb-4">💀</div>
-          <h3 className="text-3xl font-bold text-white mb-2">
-            {eliminatedPlayer.username || `Player ${eliminatedPlayer.user_id.slice(0, 6)}`}
-          </h3>
-          <p className="text-xl text-red-400 font-semibold">has been eliminated!</p>
-          
-          {/* STEP 3: Show role and secret word */}
-          <AnimatePresence>
-            {revealStep >= 3 && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 }}
-                className="mt-6 pt-6 border-t border-gray-700"
-              >
-                {/* Role Badge */}
-                <div className={`inline-block px-6 py-2 rounded-full font-bold text-lg mb-4 ${
-                  eliminated?.role === 'TRAITOR'
-                    ? 'bg-red-500/20 text-red-400 border-2 border-red-500'
-                    : 'bg-blue-500/20 text-blue-400 border-2 border-blue-500'
-                }`}>
-                  {eliminated?.role === 'TRAITOR' ? '🕵️ They were the TRAITOR!' : '👤 They were a CITIZEN...'}
-                </div>
-                
-                {/* Secret Word */}
-                <div className="mt-4">
-                  <p className="text-gray-400 text-sm mb-2">Their word was:</p>
-                  <div className="inline-block bg-gray-900 border-2 border-purple-500 rounded-lg px-6 py-3">
-                    <span className="text-3xl font-bold text-purple-400">
-                      {eliminated?.secret_word || 'Unknown'}
-                    </span>
-                  </div>
-                </div>
-                
-                {/* Reaction message */}
-                {eliminated?.role === 'TRAITOR' && (
-                  <motion.p
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ delay: 0.5 }}
-                    className="text-green-400 font-bold text-lg mt-4"
-                  >
-                    ✅ Citizens Win! The traitor has been caught!
-                  </motion.p>
-                )}
-                {eliminated?.role === 'CITIZEN' && (
-                  <motion.p
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ delay: 0.5 }}
-                    className="text-yellow-400 font-bold text-lg mt-4"
-                  >
-                    ⚠️ Wrong choice! An innocent was eliminated...
-                  </motion.p>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </motion.div>
-      )}
-
-      {/* No Elimination */}
-      {revealStep >= 2 && !eliminatedPlayer && sortedVotes.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.8 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="mb-8 bg-gray-800 border-2 border-yellow-500 rounded-2xl p-8 text-center"
+          transition={{ type: 'spring', duration: 1, bounce: 0.4 }}
+          className="text-center mb-12"
         >
-          <div className="text-6xl mb-4">🤝</div>
-          <h3 className="text-2xl font-bold text-white mb-2">It's a tie!</h3>
-          <p className="text-gray-400">No one was eliminated this round</p>
-          <p className="text-sm text-gray-500 mt-2">The game continues... 🔄</p>
+          <motion.div 
+            className="text-9xl mb-6"
+            animate={{ rotate: [0, -10, 10, -10, 10, 0] }}
+            transition={{ delay: 0.5, duration: 0.6 }}
+          >
+            {winner === 'TRAITOR' ? '🕵️' : '🏆'}
+          </motion.div>
+          <h1 className="text-6xl font-bold text-white mb-4">
+            {winner === 'TRAITOR' ? 'Traitor Wins!' : 'Citizens Win!'}
+          </h1>
+          
+          {/* Personalized victory message */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+          >
+            {didIWin ? (
+              <div>
+                <p className="text-3xl text-green-400 font-bold mb-2">✨ Victory! ✨</p>
+                <p className="text-gray-400 text-lg">
+                  {wasITraitor 
+                    ? 'Deception is an art. You mastered it. 🎭'
+                    : 'Justice prevails. The traitor has been caught! ⚖️'
+                  }
+                </p>
+              </div>
+            ) : (
+              <div>
+                <p className="text-3xl text-red-400 font-bold mb-2">😔 Defeat...</p>
+                <p className="text-gray-400 text-lg">
+                  {wasITraitor
+                    ? 'You were exposed. Better luck deceiving next time. 🕵️'
+                    : 'The traitor escaped. Trust was misplaced. 🚫'
+                  }
+                </p>
+              </div>
+            )}
+          </motion.div>
         </motion.div>
-      )}
 
-      {/* STEP 4: Vote Results */}
-      {revealStep >= 4 && (
+        {/* Traitor Reveal */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="space-y-4 mb-8"
+          transition={{ delay: 0.3 }}
+          className="bg-gray-800 border-2 border-red-500 rounded-2xl p-8 mb-8 glow-red-sm"
         >
-          <h3 className="text-xl font-bold text-white text-center mb-4">📊 Full Vote Breakdown</h3>
-          {sortedVotes.map(([userId, count], index) => {
-            const player = participants.find(p => p.user_id === userId)
-            const isEliminated = userId === voteResults?.eliminatedId
-            
-            return (
-              <motion.div
-                key={userId}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.15 }}
-                className={`p-6 rounded-xl border-2 ${
-                  isEliminated
-                    ? 'bg-red-500/20 border-red-500'
-                    : 'bg-gray-800 border-gray-700'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xl ${
-                      isEliminated ? 'bg-red-500/30' : 'bg-gray-700'
+          <div className="text-center">
+            <p className="text-gray-400 mb-3 text-lg">The traitor was...</p>
+            <div className="flex items-center justify-center gap-4 mb-4">
+              <div className="w-20 h-20 bg-red-500/20 rounded-full flex items-center justify-center text-3xl border-2 border-red-500">
+                {traitorDetails?.username?.charAt(0).toUpperCase() || '?'}
+              </div>
+              <div className="text-left">
+                <h2 className="text-4xl font-bold text-white">
+                  {traitorDetails?.username || 'Unknown Player'}
+                </h2>
+                {wasITraitor && (
+                  <p className="text-red-400 font-semibold text-lg">(That's you!) 😈</p>
+                )}
+              </div>
+            </div>
+            {mySecret && (
+              <div className="mt-6 pt-6 border-t border-gray-700">
+                <p className="text-gray-400 text-sm mb-2">Your role & word:</p>
+                <div className="inline-block px-6 py-3 bg-gray-900 rounded-lg">
+                  <span className={`font-bold ${
+                    mySecret.role === 'TRAITOR' ? 'text-red-400' : 'text-blue-400'
+                  }`}>
+                    {mySecret.role === 'TRAITOR' ? '🕵️ TRAITOR' : '👤 CITIZEN'}
+                  </span>
+                  <span className="text-gray-400 mx-2">-</span>
+                  <span className="text-purple-400 font-bold text-xl">
+                    "{mySecret.secret_word}"
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        </motion.div>
+
+        {/* Player List */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+          className="bg-gray-800 border-2 border-gray-700 rounded-2xl p-8 mb-8"
+        >
+          <h3 className="text-2xl font-bold text-white mb-6 text-center">Final Standings</h3>
+          <div className="space-y-3">
+            {participants.map((player) => {
+              const isTraitor = player.user_id === traitorId
+              const playerWon = (winner === 'TRAITOR' && isTraitor) || (winner === 'CITIZENS' && !isTraitor)
+              
+              return (
+                <div
+                  key={player.user_id}
+                  className={`p-4 rounded-lg border-2 flex items-center justify-between ${
+                    isTraitor
+                      ? 'bg-red-500/10 border-red-500'
+                      : 'bg-blue-500/10 border-blue-500'
+                  } ${!player.is_alive ? 'opacity-50' : ''}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                      isTraitor ? 'bg-red-500/20' : 'bg-blue-500/20'
                     }`}>
-                      {player?.username?.charAt(0).toUpperCase() || '?'}
+                      {player.username?.charAt(0).toUpperCase() || '?'}
                     </div>
                     <div>
-                      <p className="text-white font-bold text-lg">
-                        {player?.username || `Player ${userId.slice(0, 6)}`}
+                      <p className="text-white font-semibold">
+                        {player.username || `Player ${player.user_id.slice(0, 6)}`}
+                        {player.user_id === myUserId && ' (You)'}
                       </p>
-                      {isEliminated && (
-                        <p className="text-red-400 text-sm font-semibold">❌ Eliminated</p>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="text-right">
-                      <div className="text-3xl font-bold text-white">{count}</div>
-                      <div className="text-xs text-gray-400">
-                        {count === 1 ? 'vote' : 'votes'}
+                      <div className="flex items-center gap-2 text-sm">
+                        {isTraitor ? (
+                          <span className="text-red-400 font-semibold">🕵️ Traitor</span>
+                        ) : (
+                          <span className="text-blue-400 font-semibold">👤 Citizen</span>
+                        )}
+                        {playerWon && (
+                          <span className="text-green-400">• 🏆 Winner</span>
+                        )}
                       </div>
                     </div>
-                    <div className="flex flex-col gap-1">
-                      {Array.from({ length: count }).map((_, i) => (
-                        <motion.div
-                          key={i}
-                          initial={{ scale: 0 }}
-                          animate={{ scale: 1 }}
-                          transition={{ delay: index * 0.15 + i * 0.1 }}
-                          className="w-3 h-3 bg-red-500 rounded-full"
-                        />
-                      ))}
-                    </div>
+                  </div>
+                  <div className="text-right">
+                    {player.is_alive ? (
+                      <span className="text-green-400 font-semibold">✓ Survived</span>
+                    ) : (
+                      <span className="text-red-400">❌ Eliminated</span>
+                    )}
                   </div>
                 </div>
-              </motion.div>
-            )
-          })}
+              )
+            })}
+          </div>
         </motion.div>
-      )}
 
-      {/* Continue Info */}
-      <AnimatePresence>
-        {revealStep >= 4 && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.5 }}
-            className="mt-8 text-center text-gray-400"
+        {/* Game Tips Section */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.7 }}
+          className="bg-blue-500/10 border-2 border-blue-500 rounded-2xl p-6 mb-8"
+        >
+          <h3 className="text-xl font-bold text-blue-400 mb-4 text-center">💡 Strategy Tips for Next Game</h3>
+          <div className="grid md:grid-cols-2 gap-4 text-sm">
+            <div className="bg-gray-900 rounded-lg p-4">
+              <p className="text-blue-400 font-bold mb-2">👤 As a Citizen:</p>
+              <ul className="text-gray-300 space-y-1">
+                <li>• Watch for vague or suspicious hints</li>
+                <li>• Compare hints to find patterns</li>
+                <li>• Traitors may give hints that fit multiple words</li>
+                <li>• Trust your instincts but verify with others</li>
+              </ul>
+            </div>
+            <div className="bg-gray-900 rounded-lg p-4">
+              <p className="text-red-400 font-bold mb-2">🕵️ As a Traitor:</p>
+              <ul className="text-gray-300 space-y-1">
+                <li>• Give hints that could apply to both words</li>
+                <li>• Blend in by matching others' hint style</li>
+                <li>• Don't be too vague or you'll stand out</li>
+                <li>• Accuse others strategically during voting</li>
+              </ul>
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Action Buttons */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.9 }}
+          className="flex gap-4 justify-center"
+        >
+          <button
+            onClick={handleNewGame}
+            className="px-8 py-4 bg-purple-600 hover:bg-purple-700 rounded-xl font-bold text-white text-lg transition-colors shadow-lg glow-purple-sm"
+            title="Return home to create or join another game"
           >
-            <p>🔍 Checking win conditions...</p>
-            <p className="text-xs text-gray-500 mt-2">Next phase starting soon...</p>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            🎭 Play Again
+          </button>
+          <button
+            onClick={handleGoHome}
+            className="px-8 py-4 bg-gray-700 hover:bg-gray-600 rounded-xl font-bold text-white text-lg transition-colors"
+          >
+            🏠 Home
+          </button>
+        </motion.div>
+        
+        <p className="text-center text-gray-500 text-sm mt-4">
+          🎮 Ready for another round of deception?
+        </p>
+      </div>
     </div>
   )
 }
 
-export default RevealPhase
+export default Results
